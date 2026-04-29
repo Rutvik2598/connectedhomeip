@@ -324,6 +324,10 @@ private:
     std::optional<uint32_t> mSetupPINCode;
     uint16_t mIndex = 0;
     chip::ByteSpan mOperationalDataset;
+    // Backing storage for a dataset whose PAN ID and Network Key have been rewritten
+    // from the local PAN pool (see kPanPool in PairingCommand.cpp). When rewriting
+    // is performed, mOperationalDataset is repointed at this buffer.
+    chip::Thread::OperationalDataset mRewrittenOperationalDataset;
     chip::ByteSpan mSSID;
     chip::ByteSpan mPassword;
     char * mOnboardingPayload           = nullptr;
