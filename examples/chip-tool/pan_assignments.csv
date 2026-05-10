@@ -1,0 +1,9 @@
+# PAN ID assignment pool for multipan Thread router
+# Format: pan_id_hex,network_key_32hex
+0x1111,00112233445566778899aabbccddeeff
+0x2222,112233445566778899aabbccddeeff00
+0x3333,aabbccddeeff00112233445566778899
+0x4444,deadbeefcafefeed0123456789abcdef
+0x5555,89abcdef01234567deadbeefcafefeed
+0x6666,55aa55aa55aa55aa55aa55aa55aa55aa
+0x7777,ffeeddccbbaa99887766554433221100
