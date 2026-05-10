@@ -91,6 +91,7 @@ static_library("chip-tool-utils") {
     "commands/icd/ICDCommand.h",
     "commands/pairing/OpenCommissioningWindowCommand.cpp",
     "commands/pairing/OpenCommissioningWindowCommand.h",
+    "commands/pairing/PanIdAssignmentFile.cpp",
     "commands/pairing/PairingCommand.cpp",
     "commands/pairing/ToTLVCert.cpp",
     "commands/payload/AdditionalDataParseCommand.cpp",

@@ -171,7 +171,8 @@ CHIP_ERROR PairingCommand::RunCommand()
     // Clear the CATs in OperationalCredentialsIssuer
     mCredIssuerCmds->SetCredentialIssuerCATValues(kUndefinedCATs);
 
-    mDeviceIsICD = false;
+    mDeviceIsICD        = false;
+    mHasModifiedDataset = false;
 
     if (mCASEAuthTags.HasValue() && mCASEAuthTags.Value().size() <= kMaxSubjectCATAttributeCount)
     {
@@ -185,6 +186,20 @@ CHIP_ERROR PairingCommand::RunCommand()
             mCredIssuerCmds->SetCredentialIssuerCATValues(cats);
         }
     }
+
+    if (mPanAssignmentFile.HasValue())
+    {
+        chip::tool::PanIdAssignmentFile assignmentFile;
+        chip::tool::PanIdAssignmentEntry entry;
+
+        ReturnErrorOnFailure(assignmentFile.Load(mPanAssignmentFile.Value()));
+        ReturnErrorOnFailure(assignmentFile.GetNext(entry));
+        ReturnErrorOnFailure(mModifiedDataset.Init(mOperationalDataset));
+        ReturnErrorOnFailure(mModifiedDataset.SetPanId(entry.panId));
+        ReturnErrorOnFailure(mModifiedDataset.SetMasterKey(entry.networkKey));
+        mHasModifiedDataset = true;
+    }
+
     return RunInternal(mNodeId);
 }
 
@@ -274,11 +289,7 @@ CommissioningParameters PairingCommand::GetCommissioningParameters()
         params.SetWiFiCredentials(Controller::WiFiCredentials(mSSID, mPassword));
         break;
     case PairingNetworkType::Thread:
-        if (RewriteThreadDatasetWithPanPool(mOperationalDataset, mRewrittenOperationalDataset) == CHIP_NO_ERROR)
-        {
-            mOperationalDataset = mRewrittenOperationalDataset.AsByteSpan();
-        }
-        params.SetThreadOperationalDataset(mOperationalDataset);
+        params.SetThreadOperationalDataset(mHasModifiedDataset ? mModifiedDataset.AsByteSpan() : mOperationalDataset);
         break;
     case PairingNetworkType::WiFiOrThread:
         params.SetWiFiCredentials(Controller::WiFiCredentials(mSSID, mPassword));
