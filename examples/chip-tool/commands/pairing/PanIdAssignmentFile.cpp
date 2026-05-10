@@ -21,8 +21,8 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
-#include <stdexcept>
 #include <string>
 
 namespace chip {
@@ -102,14 +102,15 @@ CHIP_ERROR PanIdAssignmentFile::Load(const char * filePath)
 
         PanIdAssignmentEntry entry;
 
-        try
         {
-            entry.panId = static_cast<uint16_t>(std::stoul(panIdStr, nullptr, 16));
-        }
-        catch (const std::exception &)
-        {
-            ChipLogError(chipTool, "Assignment file line %u: invalid PAN ID '%s', skipping", lineNum, panIdStr.c_str());
-            continue;
+            char * end     = nullptr;
+            unsigned long val = strtoul(panIdStr.c_str(), &end, 16);
+            if (end == panIdStr.c_str() || *end != '\0' || val > 0xFFFF)
+            {
+                ChipLogError(chipTool, "Assignment file line %u: invalid PAN ID '%s', skipping", lineNum, panIdStr.c_str());
+                continue;
+            }
+            entry.panId = static_cast<uint16_t>(val);
         }
 
         if (!ParseNetworkKey(networkKeyStr, entry.networkKey, kPanIdAssignmentNetworkKeySize))
