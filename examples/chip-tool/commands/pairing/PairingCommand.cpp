@@ -54,6 +54,98 @@ using namespace ::chip::Controller;
 
 namespace {
 
+// ----------------------------------------------------------------------------
+// Multi-PAN commissioning support.
+//
+// When commissioning a Thread device via chip-tool we want each successive
+// commissioning to receive a different (PAN ID, Network Key) pair drawn from
+// a small hard-coded pool, while keeping every other field of the dataset
+// (channel, extpanid, mesh-local prefix, network name, PSKc, security policy,
+// channel mask) identical to what the user supplied on the command line.
+//
+// The matching multi-PAN border-router accepts any (PAN ID, Network Key) pair
+// from the same pool, so each commissioned device joins on its own slot.
+//
+// A persistent counter file remembers which slot to hand out next, so the
+// assignment survives across chip-tool invocations.
+// ----------------------------------------------------------------------------
+
+struct PanPoolEntry
+{
+    uint16_t panId;
+    uint8_t networkKey[chip::Thread::kSizeMasterKey];
+};
+
+// Hard-coded pool. Extend as needed; must match the border-router's `pankeys`
+// list and `panids` list.
+constexpr PanPoolEntry kPanPool[] = {
+    { 0x1234,
+      { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff } },
+    { 0x5678,
+      { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00 } },
+};
+constexpr size_t kPanPoolSize = sizeof(kPanPool) / sizeof(kPanPool[0]);
+
+const char * GetPanPoolCounterPath()
+{
+    static std::string sPath;
+    if (sPath.empty())
+    {
+        const char * home = getenv("HOME");
+        sPath             = (home != nullptr ? std::string(home) : std::string("/tmp")) + "/.chip_tool_panpool_counter";
+    }
+    return sPath.c_str();
+}
+
+// Reads the next slot index, increments the on-disk counter (with wrap-around).
+size_t TakeNextPanPoolIndex()
+{
+    size_t index      = 0;
+    const char * path = GetPanPoolCounterPath();
+
+    if (FILE * f = fopen(path, "r"); f != nullptr)
+    {
+        unsigned long stored = 0;
+        if (fscanf(f, "%lu", &stored) == 1)
+        {
+            index = static_cast<size_t>(stored) % kPanPoolSize;
+        }
+        fclose(f);
+    }
+
+    if (FILE * f = fopen(path, "w"); f != nullptr)
+    {
+        fprintf(f, "%lu\n", static_cast<unsigned long>((index + 1) % kPanPoolSize));
+        fclose(f);
+    }
+    else
+    {
+        ChipLogError(chipTool, "PanPool: unable to persist counter to %s; assignments will not be sticky", path);
+    }
+
+    return index;
+}
+
+// Parses `input` as a Thread Operational Dataset, overrides PAN ID and Network
+// Key with the next pool slot, and stores the result in `out`.
+CHIP_ERROR RewriteThreadDatasetWithPanPool(ByteSpan input, chip::Thread::OperationalDataset & out)
+{
+    VerifyOrReturnError(!input.empty(), CHIP_ERROR_INVALID_ARGUMENT);
+
+    ReturnErrorOnFailure(out.Init(input));
+
+    const size_t slot          = TakeNextPanPoolIndex();
+    const PanPoolEntry & entry = kPanPool[slot];
+
+    ReturnErrorOnFailure(out.SetPanId(entry.panId));
+    ReturnErrorOnFailure(out.SetMasterKey(entry.networkKey));
+
+    ChipLogProgress(chipTool, "PanPool: assigning slot %u (panId=0x%04x) for this commissioning",
+                    static_cast<unsigned>(slot), entry.panId);
+
+    return CHIP_NO_ERROR;
+}
+
 [[maybe_unused]] CHIP_ERROR ParseSetupPayload(SetupPayload & setupPayload, const char * onboardingPayload)
 {
 
@@ -79,7 +171,8 @@ CHIP_ERROR PairingCommand::RunCommand()
     // Clear the CATs in OperationalCredentialsIssuer
     mCredIssuerCmds->SetCredentialIssuerCATValues(kUndefinedCATs);
 
-    mDeviceIsICD = false;
+    mDeviceIsICD        = false;
+    mHasModifiedDataset = false;
 
     if (mCASEAuthTags.HasValue() && mCASEAuthTags.Value().size() <= kMaxSubjectCATAttributeCount)
     {
@@ -93,6 +186,44 @@ CHIP_ERROR PairingCommand::RunCommand()
             mCredIssuerCmds->SetCredentialIssuerCATValues(cats);
         }
     }
+
+    if (mPanAssignmentFile.HasValue())
+    {
+        chip::tool::PanIdAssignmentFile assignmentFile;
+        chip::tool::PanIdAssignmentEntry entry;
+
+        ReturnErrorOnFailure(assignmentFile.Load(mPanAssignmentFile.Value()));
+        ReturnErrorOnFailure(assignmentFile.GetNext(entry));
+        ReturnErrorOnFailure(mModifiedDataset.Init(mOperationalDataset));
+        ReturnErrorOnFailure(mModifiedDataset.SetPanId(entry.panId));
+        ReturnErrorOnFailure(mModifiedDataset.SetMasterKey(entry.networkKey));
+
+        // Debug: verify the modified dataset actually has the assigned PAN/key
+        uint16_t verifyPanId = 0;
+        if (mModifiedDataset.GetPanId(verifyPanId) == CHIP_NO_ERROR)
+        {
+            ChipLogProgress(chipTool, "DEBUG: Modified dataset PAN ID = 0x%04x (expected 0x%04x)", verifyPanId, entry.panId);
+        }
+        else
+        {
+            ChipLogError(chipTool, "DEBUG: GetPanId failed on modified dataset!");
+        }
+        uint8_t verifyKey[chip::Thread::kSizeMasterKey];
+        if (mModifiedDataset.GetMasterKey(verifyKey) == CHIP_NO_ERROR)
+        {
+            ChipLogProgress(chipTool, "DEBUG: Modified dataset network key[0..3] = %02x%02x%02x%02x",
+                            verifyKey[0], verifyKey[1], verifyKey[2], verifyKey[3]);
+        }
+        else
+        {
+            ChipLogError(chipTool, "DEBUG: GetMasterKey failed on modified dataset!");
+        }
+        // Log the full dataset byte span length so we can confirm it's being used
+        ChipLogProgress(chipTool, "DEBUG: mModifiedDataset byte span length = %zu", mModifiedDataset.AsByteSpan().size());
+
+        mHasModifiedDataset = true;
+    }
+
     return RunInternal(mNodeId);
 }
 
@@ -182,10 +313,24 @@ CommissioningParameters PairingCommand::GetCommissioningParameters()
         params.SetWiFiCredentials(Controller::WiFiCredentials(mSSID, mPassword));
         break;
     case PairingNetworkType::Thread:
-        params.SetThreadOperationalDataset(mOperationalDataset);
+        ChipLogProgress(chipTool, "DEBUG: GetCommissioningParameters mHasModifiedDataset=%d", mHasModifiedDataset);
+        params.SetThreadOperationalDataset(mHasModifiedDataset ? mModifiedDataset.AsByteSpan() : mOperationalDataset);
+        {
+            chip::ByteSpan span = mHasModifiedDataset ? mModifiedDataset.AsByteSpan() : mOperationalDataset;
+            ChipLogProgress(chipTool, "DEBUG: Thread dataset being sent: length=%zu, first4=%02x%02x%02x%02x",
+                            span.size(),
+                            span.size() > 0 ? span.data()[0] : 0,
+                            span.size() > 1 ? span.data()[1] : 0,
+                            span.size() > 2 ? span.data()[2] : 0,
+                            span.size() > 3 ? span.data()[3] : 0);
+        }
         break;
     case PairingNetworkType::WiFiOrThread:
         params.SetWiFiCredentials(Controller::WiFiCredentials(mSSID, mPassword));
+        if (RewriteThreadDatasetWithPanPool(mOperationalDataset, mRewrittenOperationalDataset) == CHIP_NO_ERROR)
+        {
+            mOperationalDataset = mRewrittenOperationalDataset.AsByteSpan();
+        }
         params.SetThreadOperationalDataset(mOperationalDataset);
         break;
     case PairingNetworkType::None:

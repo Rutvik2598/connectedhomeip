@@ -26,6 +26,8 @@
 #include <lib/support/Span.h>
 #include <lib/support/ThreadOperationalDataset.h>
 
+#include "PanIdAssignmentFile.h"
+
 #include <optional>
 #include <thread>
 
@@ -97,6 +99,10 @@ public:
             break;
         case PairingNetworkType::Thread:
             AddArgument("operationalDataset", &mOperationalDataset);
+            AddArgument("pan-assignment-file", &mPanAssignmentFile,
+                        "Path to a CSV file mapping PAN IDs to network keys. "
+                        "Format per line: <pan_id_hex>,<network_key_32hex>. "
+                        "A counter persisted in <file>.counter selects the next entry on each commissioning.");
             break;
         case PairingNetworkType::WiFiOrThread:
             AddArgument("ssid", &mSSID);
@@ -324,6 +330,10 @@ private:
     std::optional<uint32_t> mSetupPINCode;
     uint16_t mIndex = 0;
     chip::ByteSpan mOperationalDataset;
+    // Backing storage for a dataset whose PAN ID and Network Key have been rewritten
+    // from the local PAN pool (see kPanPool in PairingCommand.cpp). When rewriting
+    // is performed, mOperationalDataset is repointed at this buffer.
+    chip::Thread::OperationalDataset mRewrittenOperationalDataset;
     chip::ByteSpan mSSID;
     chip::ByteSpan mPassword;
     char * mOnboardingPayload           = nullptr;
@@ -332,6 +342,10 @@ private:
 
     bool mDeviceIsICD = false;
     uint8_t mRandomGeneratedICDSymmetricKey[chip::Crypto::kAES_CCM128_Key_Length];
+
+    chip::Optional<char *> mPanAssignmentFile;
+    chip::Thread::OperationalDataset mModifiedDataset;
+    bool mHasModifiedDataset = false;
 
     // For unpair
     chip::Platform::UniquePtr<chip::Controller::CurrentFabricRemover> mCurrentFabricRemover;
