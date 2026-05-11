@@ -197,6 +197,30 @@ CHIP_ERROR PairingCommand::RunCommand()
         ReturnErrorOnFailure(mModifiedDataset.Init(mOperationalDataset));
         ReturnErrorOnFailure(mModifiedDataset.SetPanId(entry.panId));
         ReturnErrorOnFailure(mModifiedDataset.SetMasterKey(entry.networkKey));
+
+        // Debug: verify the modified dataset actually has the assigned PAN/key
+        uint16_t verifyPanId = 0;
+        if (mModifiedDataset.GetPanId(verifyPanId) == CHIP_NO_ERROR)
+        {
+            ChipLogProgress(chipTool, "DEBUG: Modified dataset PAN ID = 0x%04x (expected 0x%04x)", verifyPanId, entry.panId);
+        }
+        else
+        {
+            ChipLogError(chipTool, "DEBUG: GetPanId failed on modified dataset!");
+        }
+        uint8_t verifyKey[chip::Thread::kSizeMasterKey];
+        if (mModifiedDataset.GetMasterKey(verifyKey) == CHIP_NO_ERROR)
+        {
+            ChipLogProgress(chipTool, "DEBUG: Modified dataset network key[0..3] = %02x%02x%02x%02x",
+                            verifyKey[0], verifyKey[1], verifyKey[2], verifyKey[3]);
+        }
+        else
+        {
+            ChipLogError(chipTool, "DEBUG: GetMasterKey failed on modified dataset!");
+        }
+        // Log the full dataset byte span length so we can confirm it's being used
+        ChipLogProgress(chipTool, "DEBUG: mModifiedDataset byte span length = %zu", mModifiedDataset.AsByteSpan().size());
+
         mHasModifiedDataset = true;
     }
 
@@ -289,7 +313,17 @@ CommissioningParameters PairingCommand::GetCommissioningParameters()
         params.SetWiFiCredentials(Controller::WiFiCredentials(mSSID, mPassword));
         break;
     case PairingNetworkType::Thread:
+        ChipLogProgress(chipTool, "DEBUG: GetCommissioningParameters mHasModifiedDataset=%d", mHasModifiedDataset);
         params.SetThreadOperationalDataset(mHasModifiedDataset ? mModifiedDataset.AsByteSpan() : mOperationalDataset);
+        {
+            chip::ByteSpan span = mHasModifiedDataset ? mModifiedDataset.AsByteSpan() : mOperationalDataset;
+            ChipLogProgress(chipTool, "DEBUG: Thread dataset being sent: length=%zu, first4=%02x%02x%02x%02x",
+                            span.size(),
+                            span.size() > 0 ? span.data()[0] : 0,
+                            span.size() > 1 ? span.data()[1] : 0,
+                            span.size() > 2 ? span.data()[2] : 0,
+                            span.size() > 3 ? span.data()[3] : 0);
+        }
         break;
     case PairingNetworkType::WiFiOrThread:
         params.SetWiFiCredentials(Controller::WiFiCredentials(mSSID, mPassword));
